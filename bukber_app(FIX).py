@@ -1,8 +1,8 @@
 import streamlit as st
 import pandas as pd
-import gspread
-from google.oauth2.service_account import Credentials
+import os
 import io
+from streamlit_autorefresh import st_autorefresh  # auto-refresh fix
 
 st.set_page_config(
     page_title="Bukber FKMP 2018",
@@ -10,32 +10,37 @@ st.set_page_config(
     layout="wide"
 )
 
+# =========================
+# AUTO REFRESH (10 detik)
+# =========================
+st_autorefresh(interval=10000, key="live_rekap_refresh")
+
 st.title("🍽️ BUKBER FKMP 2018")
 st.write("Silakan pilih menu yang ingin dipesan")
 
+FILE = "rekap_pesanan.xlsx"
+
 # =========================
-# GOOGLE SHEETS SETUP
+# SESSION CART
 # =========================
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-SERVICE_ACCOUNT_FILE = "service_account.json"  # file credentials Google Sheets
+if "cart" not in st.session_state:
+    st.session_state.cart = {}  # keyed by Nama
 
-credentials = Credentials.from_service_account_file(
-    SERVICE_ACCOUNT_FILE, scopes=SCOPES
-)
-gc = gspread.authorize(credentials)
-
-SPREADSHEET_NAME = "Bukber_FKMP_2018"
-WORKSHEET_NAME = "Rekap_Pesanan"
-
-try:
-    sh = gc.open(SPREADSHEET_NAME)
-except gspread.SpreadsheetNotFound:
-    sh = gc.create(SPREADSHEET_NAME)
-try:
-    ws = sh.worksheet(WORKSHEET_NAME)
-except gspread.WorksheetNotFound:
-    ws = sh.add_worksheet(title=WORKSHEET_NAME, rows="1000", cols="10")
-    ws.append_row(["Nama", "Menu", "Jumlah", "Harga", "Total"])
+# =========================
+# LOAD PESANAN LAMA DARI EXCEL KE SESSION_STATE CART
+# =========================
+if os.path.exists(FILE) and not st.session_state.cart:
+    df_existing = pd.read_excel(FILE, engine='openpyxl')
+    for idx, row in df_existing.iterrows():
+        nama_existing = row["Nama"]
+        if nama_existing not in st.session_state.cart:
+            st.session_state.cart[nama_existing] = []
+        st.session_state.cart[nama_existing].append({
+            "Menu": row["Menu"],
+            "Jumlah": row["Jumlah"],
+            "Harga": row["Harga"],
+            "Total": row["Total"]
+        })
 
 # =========================
 # DATA MENU
@@ -108,10 +113,6 @@ menu_tambahan = {
 }
 
 menu_minuman = {
-    "Air Es":3000,
-    "Air Hangat":3000,
-    "Teh Es":7000,
-    "Teh Hangat":7000,
     "Kelapa Muda Bijian":20000,
     "Es Tebu Lemon":20000,
     "Milky Strawberry":18000,
@@ -129,6 +130,11 @@ menu_minuman = {
     "Kunyit Asam":12000,
     "Black Coffee":10000,
     "Lemonade":10000,
+    "Teh Hangat":7000,
+    "Es Teh":7000,
+    "Air Hangat":3000,
+    "Air Es":3000,
+    "Teh Es":7000,
     "Air Mineral":7000
 }
 
@@ -179,34 +185,76 @@ with tabs[6]:
     qty_nampan = st.number_input("Jumlah Nampan", min_value=0, step=1)
 
 # =========================
-# FUNGSI TAMBAH PESANAN KE SHEETS
+# FUNGSI TAMBAH PESANAN
 # =========================
-def tambah_ke_sheets(nama, menu, qty, daftar):
+def tambah(menu, qty, daftar):
     if menu != "-" and qty > 0 and nama.strip():
         harga = daftar[menu]
         total = harga * qty
-        ws.append_row([nama, menu, qty, harga, total])
-
-if st.button("➕ Tambah Pesanan"):
-    tambah_ke_sheets(nama, kebuli, qty_kebuli, menu_kebuli_personal)
-    tambah_ke_sheets(nama, nasi, qty_nasi, menu_nasi_putih)
-    tambah_ke_sheets(nama, kuah, qty_kuah, menu_kuah)
-    tambah_ke_sheets(nama, snack, qty_snack, menu_snack)
-    tambah_ke_sheets(nama, tambahan, qty_tambahan, menu_tambahan)
-    tambah_ke_sheets(nama, minuman, qty_minuman, menu_minuman)
-    if nampan in menu_nampan_keluarga:
-        tambah_ke_sheets(nama, nampan, qty_nampan, menu_nampan_keluarga)
-    if nampan in menu_nampan_jumbo:
-        tambah_ke_sheets(nama, nampan, qty_nampan, menu_nampan_jumbo)
-    st.success(f"Pesanan untuk {nama} ditambahkan!")
+        if nama in st.session_state.cart:
+            updated = False
+            for item in st.session_state.cart[nama]:
+                if item["Menu"] == menu:
+                    item["Jumlah"] += qty
+                    item["Total"] = item["Jumlah"] * item["Harga"]
+                    updated = True
+                    break
+            if not updated:
+                st.session_state.cart[nama].append({
+                    "Menu": menu,
+                    "Jumlah": qty,
+                    "Harga": harga,
+                    "Total": total
+                })
+        else:
+            st.session_state.cart[nama] = [{
+                "Menu": menu,
+                "Jumlah": qty,
+                "Harga": harga,
+                "Total": total
+            }]
 
 # =========================
-# LIVE REKAP MULTI-USER
+# TOMBOL TAMBAH PESANAN
+# =========================
+if st.button("➕ Tambah Pesanan"):
+    if not nama.strip():
+        st.warning("Masukkan Nama Pemesan sebelum menambahkan pesanan!")
+    else:
+        tambah(kebuli, qty_kebuli, menu_kebuli_personal)
+        tambah(nasi, qty_nasi, menu_nasi_putih)
+        tambah(kuah, qty_kuah, menu_kuah)
+        tambah(snack, qty_snack, menu_snack)
+        tambah(tambahan, qty_tambahan, menu_tambahan)
+        tambah(minuman, qty_minuman, menu_minuman)
+        if nampan in menu_nampan_keluarga:
+            tambah(nampan, qty_nampan, menu_nampan_keluarga)
+        if nampan in menu_nampan_jumbo:
+            tambah(nampan, qty_nampan, menu_nampan_jumbo)
+        st.success(f"Pesanan untuk {nama} ditambahkan ke keranjang!")
+
+# =========================
+# FUNGSI LOAD FILE
+# =========================
+def get_rekap_df():
+    return pd.DataFrame(columns=["Nama","Menu","Jumlah","Harga","Total"])
+
+# =========================
+# GABUNG DATA CART + FILE
+# =========================
+rows_cart=[]
+for n,items in st.session_state.cart.items():
+    for i in items:
+        rows_cart.append({"Nama":n,"Menu":i["Menu"],"Jumlah":i["Jumlah"],"Harga":i["Harga"],"Total":i["Total"]})
+
+df_live = pd.DataFrame(rows_cart)
+st.session_state.df_live = df_live
+
+# =========================
+# LIVE REKAP 1 TABEL PER PEMESAN
 # =========================
 st.subheader("🧾 Rekap Pesanan Live")
-data = ws.get_all_records()
-df_live = pd.DataFrame(data)
-
+df_live = st.session_state.df_live
 if not df_live.empty:
     df_grouped = df_live.groupby("Nama").apply(
         lambda x: pd.Series({
@@ -214,27 +262,32 @@ if not df_live.empty:
             "Total": x["Total"].sum()
         })
     ).reset_index()
+
+    hapus_list = []
     for idx,row in df_grouped.iterrows():
-        col1,col2 = st.columns([10,1])
+        col1, col2 = st.columns([10,1])
         with col1:
             st.markdown(f"**{row['Nama']}** | {row['Pesanan']} = Total Rp {row['Total']:,.0f}")
         with col2:
             if st.button("🗑️ Hapus Pemesan", key=f"hapus_{row['Nama']}"):
-                df_live = df_live[df_live["Nama"] != row['Nama']]
-                ws.clear()
-                ws.append_row(["Nama","Menu","Jumlah","Harga","Total"])
-                for i,r in df_live.iterrows():
-                    ws.append_row([r['Nama'], r['Menu'], r['Jumlah'], r['Harga'], r['Total']])
+                hapus_list.append(row['Nama'])
+
+    for nama_hapus in hapus_list:
+        df_live = df_live[df_live["Nama"] != nama_hapus]
+        if nama_hapus in st.session_state.cart:
+            del st.session_state.cart[nama_hapus]
+        st.session_state.df_live = df_live
+
 else:
     st.info("Belum ada pesanan.")
 
 # =========================
-# DOWNLOAD EXCEL SESUAI LIVE REKAP
+# TOMBOL DOWNLOAD EXCEL
 # =========================
 st.subheader("⬇️ Download Rekap Pesanan")
 if not df_live.empty:
     buffer = io.BytesIO()
-    df_live.to_excel(buffer, index=False, engine="openpyxl")
+    df_live.to_excel(buffer,index=False,engine="openpyxl")
     buffer.seek(0)
     st.download_button(
         label="⬇️ Download Pesanan (.xlsx)",
@@ -242,3 +295,5 @@ if not df_live.empty:
         file_name="rekap_pesanan.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+else:
+    st.info("Belum ada pesanan untuk di-download.")
